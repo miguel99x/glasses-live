@@ -17,21 +17,20 @@ jobs:
       run:
         working-directory: android
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "21"
 
-      - uses: android-actions/setup-android@v3
-
+      # ubuntu-latest already ships the Android SDK (ANDROID_HOME is set).
       - name: Build APK
         run: |
           chmod +x gradlew
           ./gradlew --no-daemon assembleRelease
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: GlassesLive-android
           path: android/app/build/outputs/apk/release/*.apk
