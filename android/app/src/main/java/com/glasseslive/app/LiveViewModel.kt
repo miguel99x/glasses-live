@@ -41,6 +41,8 @@ data class LiveUiState(
     val settings: StreamSettings = StreamSettings(),
     val error: String? = null,
     val askCameraPermission: Boolean = false,
+    /** Small diagnostics line under the preview, e.g. "896x504 · 240 in · 238 shown · c2.android.hevc.decoder". */
+    val videoInfo: String = "",
 ) {
   val isRegistered: Boolean
     get() = registration == RegistrationState.REGISTERED || registration == RegistrationState.UNREGISTERING
@@ -81,7 +83,11 @@ class LiveViewModel(application: Application) : AndroidViewModel(application) {
   private var previewDecoder: HevcDecoder? = null
   private var streamDecoder: HevcDecoder? = null
   private var encoder: H264Encoder? = null
-  private var lastConfig: ByteArray? = null
+  private val paramSets = HevcParamSets()
+  private var framesIn = 0L
+  private var lastInfoMs = 0L
+  private var frameW = 0
+  private var frameH = 0
   @Volatile private var sps: ByteBuffer? = null
   @Volatile private var pps: ByteBuffer? = null
 
@@ -201,7 +207,7 @@ class LiveViewModel(application: Application) : AndroidViewModel(application) {
     camera = null
     session?.removeCamera()
     viewModelScope.launch(frameDispatcher) { releaseVideoPipeline() }
-    _ui.update { it.copy(hasVideo = false) }
+    _ui.update { it.copy(hasVideo = false, videoInfo = "") }
     StreamingService.stop(getApplication())
   }
 
@@ -224,19 +230,39 @@ class LiveViewModel(application: Application) : AndroidViewModel(application) {
     // Stamp with the phone clock so video and mic audio share one timeline.
     val pts = System.nanoTime() / 1000
 
-    if (frame.isCodecConfig) lastConfig = bytes
+    paramSets.offer(bytes)
+    framesIn++
+    if (frame.width > 0) {
+      frameW = frame.width
+      frameH = frame.height
+    }
 
-    if (encoder == null && !frame.isCodecConfig) startVideoPipeline(frame.width, frame.height)
+    if (encoder == null && !frame.isCodecConfig) startVideoPipeline(frameW, frameH)
 
     val surface = previewSurface
-    if (previewDecoder == null && surface != null && surface.isValid && frame.width > 0) {
-      previewDecoder = HevcDecoder(frame.width, frame.height, surface).takeIf { it.start() }
-      previewDecoder?.prime(lastConfig)
+    if (previewDecoder == null && surface != null && surface.isValid && frameW > 0) {
+      previewDecoder = HevcDecoder(frameW, frameH, surface).takeIf { it.start() }
+      previewDecoder?.prime(paramSets.snapshot())
     }
-    previewDecoder?.feed(bytes, pts, frame.isCodecConfig)
-    streamDecoder?.feed(bytes, pts, frame.isCodecConfig)
+    previewDecoder?.feed(bytes, pts)
+    streamDecoder?.feed(bytes, pts)
 
     if (!_ui.value.hasVideo && !frame.isCodecConfig) _ui.update { it.copy(hasVideo = true) }
+    publishVideoInfo()
+  }
+
+  /** Once a second, show how many frames arrived and how many the decoder drew. */
+  private fun publishVideoInfo() {
+    val now = System.currentTimeMillis()
+    if (now - lastInfoMs < 1000) return
+    lastInfoMs = now
+    val preview = previewDecoder
+    val info = buildString {
+      append("${frameW}x$frameH · $framesIn in · ${preview?.framesRendered ?: 0} shown")
+      append(" · ${preview?.codecName ?: "no preview decoder"}")
+      if (encoder == null) append(" · encoder off")
+    }
+    _ui.update { it.copy(videoInfo = info) }
   }
 
   private fun startVideoPipeline(width: Int, height: Int) {
@@ -258,7 +284,8 @@ class LiveViewModel(application: Application) : AndroidViewModel(application) {
     encoder = enc
     val surface = enc.inputSurface ?: return
     streamDecoder = HevcDecoder(width, height, surface).takeIf { it.start() }
-    streamDecoder?.prime(lastConfig)
+    if (streamDecoder == null) report("This phone couldn't start a video decoder for the glasses stream.")
+    streamDecoder?.prime(paramSets.snapshot())
   }
 
   private fun releaseVideoPipeline() {
@@ -268,7 +295,8 @@ class LiveViewModel(application: Application) : AndroidViewModel(application) {
     streamDecoder = null
     encoder?.stop()
     encoder = null
-    lastConfig = null
+    paramSets.clear()
+    framesIn = 0
     sps = null
     pps = null
   }

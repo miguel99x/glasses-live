@@ -2,6 +2,7 @@ package com.glasseslive.app
 
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
+import android.media.MediaCodecList
 import android.media.MediaFormat
 import android.os.Bundle
 import android.os.Handler
@@ -12,71 +13,147 @@ import java.nio.ByteBuffer
 
 private const val TAG = "GlassesLive"
 
-/** True if this HEVC access unit contains a keyframe (IRAP NAL types 16-21). */
-fun isHevcKeyframe(data: ByteArray): Boolean {
+/** One NAL unit inside an Annex-B buffer: [start, end) includes its start code. */
+private class Nal(val start: Int, val end: Int, val type: Int)
+
+private const val NAL_VPS = 32
+private const val NAL_SPS = 33
+private const val NAL_PPS = 34
+
+private fun isIrap(type: Int) = type in 16..21
+
+private fun isParamSet(type: Int) = type == NAL_VPS || type == NAL_SPS || type == NAL_PPS
+
+/** Splits an Annex-B HEVC buffer (00 00 01 / 00 00 00 01 start codes) into NAL units. */
+private fun splitNals(data: ByteArray): List<Nal> {
+  val starts = ArrayList<Int>() // index of each start code's first byte
+  val headers = ArrayList<Int>() // index of each NAL header byte
   var i = 0
-  while (i + 4 < data.size) {
-    val isStart3 = data[i] == 0.toByte() && data[i + 1] == 0.toByte() && data[i + 2] == 1.toByte()
-    if (isStart3) {
-      val type = (data[i + 3].toInt() shr 1) and 0x3F
-      if (type in 16..21) return true
+  while (i + 2 < data.size) {
+    if (data[i] == 0.toByte() && data[i + 1] == 0.toByte() && data[i + 2] == 1.toByte()) {
+      val codeStart = if (i > 0 && data[i - 1] == 0.toByte()) i - 1 else i
+      starts += codeStart
+      headers += i + 3
       i += 3
     } else {
       i++
     }
   }
-  return false
+  val out = ArrayList<Nal>(starts.size)
+  for (k in starts.indices) {
+    val header = headers[k]
+    if (header >= data.size) continue
+    val end = if (k + 1 < starts.size) starts[k + 1] else data.size
+    out += Nal(starts[k], end, (data[header].toInt() shr 1) and 0x3F)
+  }
+  return out
+}
+
+/** Remembers the latest VPS/SPS/PPS seen in the glasses' stream. */
+class HevcParamSets {
+  private val sets = HashMap<Int, ByteArray>()
+
+  @Synchronized
+  fun offer(data: ByteArray) {
+    for (n in splitNals(data)) if (isParamSet(n.type)) sets[n.type] = data.copyOfRange(n.start, n.end)
+  }
+
+  @Synchronized fun snapshot(): Map<Int, ByteArray> = HashMap(sets)
+
+  @Synchronized fun clear() = sets.clear()
 }
 
 /**
  * Decodes the glasses' compressed HEVC frames straight onto a Surface.
  * Used twice: once for the on-screen preview and once to feed the H.264 encoder.
- * Waits for codec config + a keyframe before rendering, so it can start mid-stream.
+ *
+ * Like Meta's sample app, it finds keyframes and parameter sets by reading the NAL units itself,
+ * waits for a keyframe before decoding, and prefers a software decoder: some phone hardware
+ * HEVC decoders (Samsung Exynos, e.g. Galaxy S9) turn this stream into garbage.
  */
 class HevcDecoder(private val width: Int, private val height: Int, private val surface: Surface) {
-  private var codec: MediaCodec? = null
-  private var configBytes: ByteArray? = null
-  private var gotKeyframe = false
+  companion object {
+    private val BLOCKED = setOf("OMX.Exynos.hevc.dec", "c2.mtk.hevc.decoder")
 
-  fun start(): Boolean =
-      try {
-        val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_HEVC, width, height)
-        codec =
-            MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_HEVC).apply {
-              configure(format, surface, null, 0)
-              start()
+    /** Usable HEVC decoders on this phone, software first. */
+    fun candidates(): List<String> =
+        MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos
+            .filter { info ->
+              !info.isEncoder && info.name !in BLOCKED &&
+                  info.supportedTypes.any { it.equals(MediaFormat.MIMETYPE_VIDEO_HEVC, ignoreCase = true) }
             }
-        true
-      } catch (e: Exception) {
-        Log.e(TAG, "HEVC decoder start failed", e)
-        codec = null
-        false
-      }
+            .sortedBy { if (it.isSoftwareOnly) 0 else 1 }
+            .map { it.name }
+  }
 
-  /** Remember the parameter sets so a decoder created later can be primed. */
-  fun prime(config: ByteArray?) {
-    if (config != null) feed(config, 0, isConfig = true)
+  private var codec: MediaCodec? = null
+  var codecName: String = "none"
+    private set
+  private val paramSets = HashMap<Int, ByteArray>()
+  private var active = false
+  @Volatile var framesRendered = 0L
+    private set
+
+  fun start(): Boolean {
+    val names = candidates().ifEmpty { listOf("") }
+    for (name in names) {
+      var c: MediaCodec? = null
+      try {
+        c = if (name.isEmpty()) MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_HEVC)
+            else MediaCodec.createByCodecName(name)
+        c.configure(MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_HEVC, width, height), surface, null, 0)
+        c.start()
+        codec = c
+        codecName = c.name
+        Log.i(TAG, "HEVC decoder: $codecName (${width}x$height)")
+        return true
+      } catch (e: Exception) {
+        Log.w(TAG, "HEVC decoder $name failed to start", e)
+        try { c?.release() } catch (_: Exception) {}
+      }
+    }
+    return false
+  }
+
+  /** Hands over parameter sets seen before this decoder existed. */
+  fun prime(sets: Map<Int, ByteArray>) {
+    for ((type, bytes) in sets) paramSets.putIfAbsent(type, bytes)
   }
 
   /** Must be called from one thread, in frame order. */
-  fun feed(data: ByteArray, ptsUs: Long, isConfig: Boolean) {
+  fun feed(data: ByteArray, ptsUs: Long) {
     val c = codec ?: return
-    if (isConfig) {
-      configBytes = data
-    } else {
-      if (!gotKeyframe) {
-        if (configBytes == null || !isHevcKeyframe(data)) return
-        gotKeyframe = true
+    val nals = splitNals(data)
+    if (nals.isEmpty()) return
+
+    var configChanged = false
+    var keyframe = false
+    val picture = java.io.ByteArrayOutputStream(data.size)
+    for (n in nals) {
+      when {
+        isParamSet(n.type) -> {
+          val bytes = data.copyOfRange(n.start, n.end)
+          if (!bytes.contentEquals(paramSets[n.type])) configChanged = true
+          paramSets[n.type] = bytes
+        }
+        else -> {
+          if (isIrap(n.type)) keyframe = true
+          picture.write(data, n.start, n.end - n.start)
+        }
       }
     }
+
     try {
-      val index = c.dequeueInputBuffer(10_000)
-      if (index >= 0) {
-        val input = c.getInputBuffer(index) ?: return
-        input.clear()
-        input.put(data)
-        val flags = if (isConfig) MediaCodec.BUFFER_FLAG_CODEC_CONFIG else 0
-        c.queueInputBuffer(index, 0, data.size, ptsUs, flags)
+      if (!active) {
+        // Start on the first keyframe once all three parameter sets are known.
+        if (!keyframe || paramSets.size < 3) return
+        queue(c, config(), 0, MediaCodec.BUFFER_FLAG_CODEC_CONFIG)
+        active = true
+      } else if (configChanged && paramSets.size == 3) {
+        queue(c, config(), 0, MediaCodec.BUFFER_FLAG_CODEC_CONFIG)
+      }
+      if (picture.size() > 0) {
+        queue(c, picture.toByteArray(), ptsUs, if (keyframe) MediaCodec.BUFFER_FLAG_KEY_FRAME else 0)
       }
       drain(c)
     } catch (e: Exception) {
@@ -84,24 +161,44 @@ class HevcDecoder(private val width: Int, private val height: Int, private val s
     }
   }
 
+  private fun config(): ByteArray = paramSets[NAL_VPS]!! + paramSets[NAL_SPS]!! + paramSets[NAL_PPS]!!
+
+  private fun queue(c: MediaCodec, bytes: ByteArray, ptsUs: Long, flags: Int) {
+    // Keep output moving so an input buffer frees up; dropping input would corrupt later frames.
+    var index = -1
+    for (attempt in 0 until 10) {
+      index = c.dequeueInputBuffer(20_000)
+      if (index >= 0) break
+      drain(c)
+    }
+    if (index < 0) {
+      Log.w(TAG, "HEVC decoder busy - frame dropped")
+      return
+    }
+    val input = c.getInputBuffer(index) ?: return
+    input.clear()
+    input.put(bytes)
+    c.queueInputBuffer(index, 0, bytes.size, ptsUs, flags)
+  }
+
   private fun drain(c: MediaCodec) {
     val info = MediaCodec.BufferInfo()
     while (true) {
       val out = c.dequeueOutputBuffer(info, 0)
+      if (out == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED || out == MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED) continue
       if (out < 0) break
-      // Render with the frame's own timestamp so the encoder keeps it.
-      c.releaseOutputBuffer(out, info.presentationTimeUs * 1000)
+      // render = true keeps the frame's timestamp, which the H.264 encoder uses.
+      val render = info.size > 0
+      c.releaseOutputBuffer(out, render)
+      if (render) framesRendered++
     }
   }
 
   fun stop() {
-    try {
-      codec?.stop()
-    } catch (_: Exception) {}
-    try {
-      codec?.release()
-    } catch (_: Exception) {}
+    try { codec?.stop() } catch (_: Exception) {}
+    try { codec?.release() } catch (_: Exception) {}
     codec = null
+    active = false
   }
 }
 

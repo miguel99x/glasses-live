@@ -60,6 +60,27 @@ import kotlinx.coroutines.delay
 
 private val LiveRed = Color(0xFFE5282F)
 
+// Neutral dark greys (Material's defaults are purple-tinted).
+private val AppColors =
+    darkColorScheme(
+        primary = LiveRed,
+        onPrimary = Color.White,
+        background = Color(0xFF111111),
+        onBackground = Color.White,
+        surface = Color(0xFF111111),
+        onSurface = Color.White,
+        surfaceVariant = Color(0xFF2A2A2A),
+        onSurfaceVariant = Color(0xFFCCCCCC),
+        surfaceContainerLowest = Color(0xFF0C0C0C),
+        surfaceContainerLow = Color(0xFF181818),
+        surfaceContainer = Color(0xFF1E1E1E),
+        surfaceContainerHigh = Color(0xFF262626),
+        surfaceContainerHighest = Color(0xFF303030),
+        secondaryContainer = Color(0xFF3A3A3A),
+        onSecondaryContainer = Color.White,
+        outline = Color(0xFF777777),
+    )
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LiveScreen(
@@ -72,7 +93,7 @@ fun LiveScreen(
   val ui by viewModel.ui.collectAsStateWithLifecycle()
   var showSettings by remember { mutableStateOf(false) }
 
-  MaterialTheme(colorScheme = darkColorScheme(primary = LiveRed, onPrimary = Color.White)) {
+  MaterialTheme(colorScheme = AppColors) {
     Scaffold(
         topBar = {
           TopAppBar(
@@ -90,7 +111,11 @@ fun LiveScreen(
           horizontalAlignment = Alignment.CenterHorizontally,
           verticalArrangement = Arrangement.spacedBy(14.dp),
       ) {
-        Preview(viewModel, ui)
+        // The preview takes whatever height is left, so the buttons always fit on screen.
+        Preview(viewModel, ui, Modifier.weight(1f))
+        if (ui.videoInfo.isNotEmpty() && !ui.isLive) {
+          Text(ui.videoInfo, style = MaterialTheme.typography.labelSmall, color = Color.Gray, textAlign = TextAlign.Center)
+        }
         Text(
             ui.statusLine,
             style = MaterialTheme.typography.titleMedium,
@@ -99,7 +124,8 @@ fun LiveScreen(
         if (ui.isLive && ui.audioNote.isNotEmpty()) {
           Text(ui.audioNote, style = MaterialTheme.typography.bodySmall)
         }
-        Controls(viewModel, ui, onConnect, onGoLive) { showSettings = true }
+        Controls(viewModel, ui, onConnect,
+            onGoLive = { if (ui.settings.isReady) onGoLive() else showSettings = true }) { showSettings = true }
       }
     }
 
@@ -134,10 +160,10 @@ fun LiveScreen(
 }
 
 @Composable
-private fun Preview(viewModel: LiveViewModel, ui: LiveUiState) {
+private fun Preview(viewModel: LiveViewModel, ui: LiveUiState, modifier: Modifier = Modifier) {
   Box(
       modifier =
-          Modifier.height(440.dp)
+          modifier
               .aspectRatio(9f / 16f, matchHeightConstraintsFirst = true)
               .clip(RoundedCornerShape(16.dp))
               .background(Color.Black),
