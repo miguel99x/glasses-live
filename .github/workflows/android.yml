@@ -1,5 +1,6 @@
-# Builds the Android APK. Download it from the run's "Artifacts" section
-# and install it on your Android phone.
+# Builds the Android APK and publishes it as a public download:
+#   https://github.com/miguel99x/glasses-live/releases/download/android-latest/GlassesLive.apk
+# Anyone can open that link on an Android phone - no GitHub account needed.
 name: Android APK
 
 on:
@@ -13,6 +14,8 @@ jobs:
   apk:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: write # lets the job create the download release
     defaults:
       run:
         working-directory: android
@@ -29,8 +32,38 @@ jobs:
         run: |
           chmod +x gradlew
           ./gradlew --no-daemon assembleRelease
+          cp app/build/outputs/apk/release/app-release.apk GlassesLive.apk
 
       - uses: actions/upload-artifact@v6
         with:
           name: GlassesLive-android
-          path: android/app/build/outputs/apk/release/*.apk
+          path: android/GlassesLive.apk
+
+      - name: Publish download link
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > notes.md <<EOF
+          **Download:** tap \`GlassesLive.apk\` below on an Android phone (Android 12 or newer).
+
+          Built from commit ${GITHUB_SHA::7}.
+
+          ### Before installing
+          1. Install the **Meta AI** app and pair your Ray-Ban Meta glasses with this phone.
+          2. In Meta AI, turn on **Developer Mode** (Settings > App Info, tap the version number 5 times).
+
+          ### Install
+          1. Open the downloaded \`GlassesLive.apk\`.
+          2. When Android warns about unknown apps, tap **Settings**, allow it, go back, and tap **Install**.
+          3. Updating to a newer build? Uninstall the old Glasses Live first (each build is signed separately for now).
+
+          ### Use
+          Allow **Nearby devices** > **Connect to Meta AI** > **Camera on** > Settings: add your stream key > **Go live**.
+          EOF
+          gh release delete android-latest --yes --cleanup-tag 2>/dev/null || true
+          gh release create android-latest GlassesLive.apk \
+            --target "$GITHUB_SHA" \
+            --title "Glasses Live for Android (latest test build)" \
+            --notes-file notes.md \
+            --prerelease

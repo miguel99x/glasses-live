@@ -18,8 +18,9 @@ build and needs no developer account, as described in the next section.
 ## Android (free, no developer account)
 
 **Get the app:**
-- **From GitHub:** Actions tab > **Android APK** > the latest run > download
-  **GlassesLive-android** under Artifacts, unzip it, and copy the `.apk` to the phone.
+- **Direct download** (anyone can use it, no GitHub account needed). Open this on the phone:
+  https://github.com/miguel99x/glasses-live/releases/download/android-latest/GlassesLive.apk
+  Every Android build replaces it with the newest version.
 - **Or build it on a PC** with Android Studio installed: open the `android/`
   folder in Android Studio and click Run with the phone plugged in over USB
   (turn on USB debugging in the phone's Developer options first).
