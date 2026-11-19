@@ -12,7 +12,30 @@ headset mode) or the phone's mic.
 You build it with **no Mac**: GitHub's cloud Macs compile it and upload it to
 TestFlight, and you install it on your iPhone from there.
 
-## Your one-time setup
+There is also an **Android version** in [`android/`](android/). It's free to
+build and needs no developer account, as described in the next section.
+
+## Android (free, no developer account)
+
+**Get the app:**
+- **From GitHub:** Actions tab > **Android APK** > the latest run > download
+  **GlassesLive-android** under Artifacts, unzip it, and copy the `.apk` to the phone.
+- **Or build it on a PC** with Android Studio installed: open the `android/`
+  folder in Android Studio and click Run with the phone plugged in over USB
+  (turn on USB debugging in the phone's Developer options first).
+
+**On the Android phone (Android 12 or newer):**
+1. Install the **Meta AI** app and pair your glasses with *this* phone.
+   Glasses connect to one phone at a time.
+2. Turn on **Developer Mode** in Meta AI (Settings > App Info, then tap the version 5 times).
+3. Open the `.apk` and allow "install unknown apps" for your file manager when Android asks.
+4. In Glasses Live, allow **Nearby devices**, then **Connect to Meta AI**, **Camera on**, and **Go live**.
+
+How it works on Android: the glasses send compressed HEVC video. The phone's
+hardware decoder renders it into a hardware H.264 encoder, and RootEncoder
+(v2.8.1) publishes that over RTMP. The Android version streams vertically (9:16) for now.
+
+## iPhone setup (one time)
 
 ### 1. Apple ($99/year)
 1. Join the **Apple Developer Program** at developer.apple.com/programs.
