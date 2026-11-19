@@ -10,6 +10,7 @@ import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
 import android.media.MediaRecorder
+import android.os.Build
 import android.util.Log
 import java.nio.ByteBuffer
 import kotlin.concurrent.thread
@@ -40,16 +41,7 @@ class AudioCapture(
     var note = "Phone mic"
     val micSource: Int
     if (source == AudioSource.GLASSES) {
-      val headset =
-          audioManager.availableCommunicationDevices.firstOrNull {
-            it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO || it.type == AudioDeviceInfo.TYPE_BLE_HEADSET
-          }
-      if (headset != null && audioManager.setCommunicationDevice(headset)) {
-        audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
-        note = "Glasses mic"
-      } else {
-        note = "Glasses mic not found - using phone mic"
-      }
+      note = if (routeToGlassesMic()) "Glasses mic" else "Glasses mic not found - using phone mic"
       micSource = MediaRecorder.AudioSource.VOICE_COMMUNICATION
     } else {
       micSource = MediaRecorder.AudioSource.CAMCORDER
@@ -128,9 +120,46 @@ class AudioCapture(
     restoreRoute()
   }
 
+  /** Sends mic input through the glasses' Bluetooth headset link, if they're connected. */
+  private fun routeToGlassesMic(): Boolean {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+      // Android 12+: pick the Bluetooth headset as the communication device.
+      val headset =
+          audioManager.availableCommunicationDevices.firstOrNull {
+            it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO || it.type == AudioDeviceInfo.TYPE_BLE_HEADSET
+          } ?: return false
+      if (!audioManager.setCommunicationDevice(headset)) return false
+      audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+      return true
+    }
+    // Android 10/11 (e.g. Galaxy S9): the older Bluetooth SCO switch.
+    val hasHeadset =
+        audioManager.getDevices(AudioManager.GET_DEVICES_INPUTS).any {
+          it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO
+        }
+    if (!hasHeadset || !audioManager.isBluetoothScoAvailableOffCall) return false
+    audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+    @Suppress("DEPRECATION")
+    audioManager.startBluetoothSco()
+    @Suppress("DEPRECATION")
+    audioManager.isBluetoothScoOn = true
+    usingLegacySco = true
+    return true
+  }
+
+  private var usingLegacySco = false
+
   private fun restoreRoute() {
     try {
-      audioManager.clearCommunicationDevice()
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        audioManager.clearCommunicationDevice()
+      } else if (usingLegacySco) {
+        @Suppress("DEPRECATION")
+        audioManager.isBluetoothScoOn = false
+        @Suppress("DEPRECATION")
+        audioManager.stopBluetoothSco()
+        usingLegacySco = false
+      }
       audioManager.mode = AudioManager.MODE_NORMAL
     } catch (_: Exception) {}
   }

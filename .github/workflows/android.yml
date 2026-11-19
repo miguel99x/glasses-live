@@ -45,7 +45,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cat > notes.md <<EOF
-          **Download:** tap \`GlassesLive.apk\` below on an Android phone (Android 12 or newer).
+          **Download:** tap \`GlassesLive.apk\` below on an Android phone (Android 10 or newer, e.g. Galaxy S9 and up).
 
           Built from commit ${GITHUB_SHA::7}.
 
@@ -59,7 +59,7 @@ jobs:
           3. Updating to a newer build? Uninstall the old Glasses Live first (each build is signed separately for now).
 
           ### Use
-          Allow **Nearby devices** > **Connect to Meta AI** > **Camera on** > Settings: add your stream key > **Go live**.
+          Allow **Nearby devices** if asked > **Connect to Meta AI** > **Camera on** > Settings: add your stream key > **Go live**.
           EOF
           gh release delete android-latest --yes --cleanup-tag 2>/dev/null || true
           gh release create android-latest GlassesLive.apk \

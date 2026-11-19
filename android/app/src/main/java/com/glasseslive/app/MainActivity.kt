@@ -2,6 +2,7 @@ package com.glasseslive.app
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.view.WindowManager
@@ -26,7 +27,7 @@ class MainActivity : ComponentActivity() {
   // Android permissions: Bluetooth (needed before the Meta SDK starts) and notifications.
   private val startupPermissions =
       registerForActivityResult(RequestMultiplePermissions()) { result ->
-        if (result[Manifest.permission.BLUETOOTH_CONNECT] == true || hasPermission(Manifest.permission.BLUETOOTH_CONNECT)) {
+        if (hasBluetoothPermission()) {
           initSdk()
         } else {
           viewModel.report("Glasses Live needs the Nearby devices (Bluetooth) permission to reach your glasses.")
@@ -77,13 +78,30 @@ class MainActivity : ComponentActivity() {
 
   override fun onStart() {
     super.onStart()
-    if (hasPermission(Manifest.permission.BLUETOOTH_CONNECT)) {
+    if (hasBluetoothPermission()) {
       initSdk()
+      // Android 13+ asks separately for notifications (used for the "live" notice).
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+          !hasPermission(Manifest.permission.POST_NOTIFICATIONS)) {
+        notificationPermission.launch(arrayOf(Manifest.permission.POST_NOTIFICATIONS))
+      }
     } else {
-      startupPermissions.launch(
-          arrayOf(Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.POST_NOTIFICATIONS))
+      // Only Android 12+ gets here: older versions grant Bluetooth at install time.
+      val wanted = mutableListOf(Manifest.permission.BLUETOOTH_CONNECT)
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        wanted += Manifest.permission.POST_NOTIFICATIONS
+      }
+      startupPermissions.launch(wanted.toTypedArray())
     }
   }
+
+  private val notificationPermission =
+      registerForActivityResult(RequestMultiplePermissions()) {}
+
+  /** Android 10/11 grant Bluetooth at install; Android 12+ need "Nearby devices". */
+  private fun hasBluetoothPermission() =
+      Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+          hasPermission(Manifest.permission.BLUETOOTH_CONNECT)
 
   private fun goLive() {
     val needsMic = viewModel.ui.value.settings.audio != AudioSource.NONE

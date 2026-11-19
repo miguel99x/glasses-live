@@ -25,12 +25,12 @@ build and needs no developer account, as described in the next section.
   folder in Android Studio and click Run with the phone plugged in over USB
   (turn on USB debugging in the phone's Developer options first).
 
-**On the Android phone (Android 12 or newer):**
+**On the Android phone (Android 10 or newer, e.g. Galaxy S9 and up):**
 1. Install the **Meta AI** app and pair your glasses with *this* phone.
    Glasses connect to one phone at a time.
 2. Turn on **Developer Mode** in Meta AI (Settings > App Info, then tap the version 5 times).
 3. Open the `.apk` and allow "install unknown apps" for your file manager when Android asks.
-4. In Glasses Live, allow **Nearby devices**, then **Connect to Meta AI**, **Camera on**, and **Go live**.
+4. In Glasses Live, allow **Nearby devices** if asked (Android 12+), then **Connect to Meta AI**, **Camera on**, and **Go live**.
 
 How it works on Android: the glasses send compressed HEVC video. The phone's
 hardware decoder renders it into a hardware H.264 encoder, and RootEncoder
